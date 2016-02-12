@@ -120,7 +120,7 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
         timepoints = metadata['timepoints']
         if skip_latest_timepoint and timepoints:
             timepoints.pop()
-        position_idxs = [int(k) for k in metadata['positions'].keys()]
+        position_idxs = sorted(int(k) for k in metadata['positions'].keys())
         print('', str(src_exp_dpath))
         if copy_metadata:
             metadatas.append((dst_exp_dpath / 'experiment_metadata.json', metadata_str))
