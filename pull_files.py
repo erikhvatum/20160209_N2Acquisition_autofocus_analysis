@@ -106,7 +106,7 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
         if not dry_run:
             if dst_fpath.exists():
                 dst_fpath.unlink()
-            (shutil.move if mv_else_cp else shutil.copy2)(src_fpath, dst_fpath)
+            (shutil.move if mv_else_cp else shutil.copy2)(str(src_fpath), str(dst_fpath))
         processed_bytecount += bytecount
         print('{:.3%}'.format(processed_bytecount / total_bytecount))
 
@@ -132,11 +132,9 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
             dst_fpath = dst_exp_dpath / 'acquire_youngworms-zp3.py'
             if not _should_skip(src_fpath, dst_fpath):
                 cp_fpaths.append((src_fpath, dst_fpath))
-        # i = 0
-        for timepoint in timepoints:
-            # if i > 10:
+        for timepoint_idx, timepoint in enumerate(timepoints):
+            # if timepoint_idx > 10:
             #     break
-            # i+=1
             print(' ', timepoint)
             if copy_calibrations:
                 def do_calibration_fname(fname):
@@ -162,7 +160,7 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
                                 dst_fpath = dst_stack_dpath / src_fpath.name
                                 if not _should_skip(src_fpath, dst_fpath):
                                     xx_fpaths.append((src_fpath, dst_fpath))
-                if copy_metadata:
+                if copy_metadata and timepoint_idx == 0:
                     pos_metadata_str, pos_metadata = _load_json_metadata(src_pos_dpath / 'position_metadata.json')
                     metadatas.append((dst_pos_dpath / 'position_metadata.json', pos_metadata_str))
                 if copy_other_data:
