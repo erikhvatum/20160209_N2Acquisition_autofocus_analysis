@@ -86,6 +86,18 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
     processed_bytecount = 0
     total_bytecount = 0
 
+    def metadata_op(dst_fpath, metadata_str):
+        nonlocal processed_bytecount
+        _mkdir_for_fpath(dst_fpath, dry_run)
+        print('=> "{}"'.format(dst_fpath))
+        if not dry_run:
+            if dst_fpath.exists():
+                dst_fpath.unlink()
+            with dst_fpath.open('w') as f:
+                print(metadata_str, end='', file=f)
+        processed_bytecount += len(metadata_str)
+        print('{:.3%}'.format(processed_bytecount / total_bytecount))
+
     def file_op(src_fpath, dst_fpath, mv_else_cp):
         nonlocal processed_bytecount
         _mkdir_for_fpath(dst_fpath, dry_run)
@@ -96,7 +108,7 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
                 dst_fpath.unlink()
             (shutil.move if mv_else_cp else shutil.copy2)(src_fpath, dst_fpath)
         processed_bytecount += bytecount
-        print('{:.2%}'.format(processed_bytecount / total_bytecount))
+        print('{:.3%}'.format(processed_bytecount / total_bytecount))
 
     mv_fpaths = []
     cp_fpaths = []
@@ -120,7 +132,11 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
             dst_fpath = dst_exp_dpath / 'acquire_youngworms-zp3.py'
             if not _should_skip(src_fpath, dst_fpath):
                 cp_fpaths.append((src_fpath, dst_fpath))
+        # i = 0
         for timepoint in timepoints:
+            # if i > 10:
+            #     break
+            # i+=1
             print(' ', timepoint)
             if copy_calibrations:
                 def do_calibration_fname(fname):
@@ -133,12 +149,12 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
             for position_idx in position_idxs:
                 print('  ', position_idx)
                 src_pos_dpath = src_exp_dpath / '{:02}'.format(position_idx)
-                dst_pos_dpath = src_exp_dpath / '{:02}'.format(position_idx)
+                dst_pos_dpath = dst_exp_dpath / '{:02}'.format(position_idx)
                 if zstack_action != ZStackAction.IgnoreZStacks:
                     stack_dname = '{} focus'.format(timepoint)
                     src_stack_dpath = src_pos_dpath / stack_dname
                     if src_stack_dpath.exists():
-                        print('   ', stack_dname)
+                        print('    focus')
                         dst_stack_dpath = dst_pos_dpath / stack_dname
                         xx_fpaths = mv_fpaths if zstack_action is ZStackAction.MoveZStacks else cp_fpaths
                         for src_fpath in sorted(src_stack_dpath.glob('*')):
@@ -155,7 +171,11 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
                     if not _should_skip(src_fpath, dst_fpath):
                         cp_fpaths.append((src_fpath, dst_fpath))
 
-    total_bytecount = sum(fpath.stat().st_size for fpaths in (mv_fpaths, cp_fpaths) for fpath in fpaths)
+    total_bytecount = sum(len(metadata_str) for metadata_fpath, metadata_str in metadatas)
+    total_bytecount+= sum(fpath[0].stat().st_size for fpaths in (mv_fpaths, cp_fpaths) for fpath in fpaths)
+
+    for dst_fpath, metadata_str in metadatas:
+        metadata_op(dst_fpath, metadata_str)
     for src_fpath, dst_fpath in mv_fpaths:
         file_op(src_fpath, dst_fpath, True)
     for src_fpath, dst_fpath in cp_fpaths:
