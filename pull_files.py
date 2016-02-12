@@ -159,7 +159,7 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
                         xx_fpaths = mv_fpaths if zstack_action is ZStackAction.MoveZStacks else cp_fpaths
                         for src_fpath in sorted(src_stack_dpath.glob('*')):
                             if re.match(r'fine_focus-\d{2}\.tiff', src_fpath.name):
-                                dst_fpath = dst_stack_dpath / '{} focus'.format(timepoint)
+                                dst_fpath = dst_stack_dpath / src_fpath.name
                                 if not _should_skip(src_fpath, dst_fpath):
                                     xx_fpaths.append((src_fpath, dst_fpath))
                 if copy_metadata:
