@@ -24,24 +24,150 @@
 
 import argparse
 import enum
+import json
 from pathlib import Path
+import re
+import shutil
+import time
 
-SOURCE_5X_DPATH = Path('/mnt/scopearray/Sinha_Drew/20160209_N2Acquisition_1_5x/')
+SOURCE_5X_DPATH = Path('/mnt/scopearray/Sinha_Drew/20160209_N2Acquisition_1_5x')
+SOURCE_10X_DPATH = Path('/mnt/scopearray/Sinha_Drew/20160209_N2Acquisition_1_10x')
+DESTINATION_DPATH = Path(__file__).parent
+JSON_METADATA_LOADING_RETRY_COUNT = 3
 
 class ZStackAction(enum.Enum):
     CopyZStacks = 0
     MoveZStacks = 1
     IgnoreZStacks = 2
 
-def pull_files(zstack_action, include_newest_zstacks, copy_metadata, copy_calibrations, copy_other_data):
-    pass
+def _load_json_metadata(fpath):
+    # Retry if parsing fails in case json file was truncated or absent due to being in the process of being rewritten
+    i = 0
+    while True:
+        try:
+            with fpath.open('r') as f:
+                json_str = f.read()
+                return json_str, json.loads(json_str)
+        except FileNotFoundError:
+            if i < JSON_METADATA_LOADING_RETRY_COUNT:
+                print('Failed to open "{}".  Retrying in 1 second.'.format(fpath), file=sys.stderr)
+                time.sleep(1)
+            else:
+                raise
+        except json.JSONDecodeError as e:
+            if i < JSON_METADATA_LOADING_RETRY_COUNT:
+                print('Failed to parse "{}".  Retrying in 1 second.'.format(fpath), file=sys.stderr)
+                time.sleep(1)
+            else:
+                raise
+        i += 1
+
+def _mkdir_for_fpath(fpath, dry_run):
+    dpath = fpath.parent
+    if not dpath.exists():
+        print('mkdir', str(dpath))
+        if not dry_run:
+            dpath.mkdir(parents=True)
+
+def _should_skip(src_fpath, dst_fpath):
+        skip = False
+        if not src_fpath.exists():
+            skip = True
+        elif dst_fpath.exists():
+            src_stat = src_fpath.stat()
+            dst_stat = dst_fpath.stat()
+            skip = (
+                src_stat.st_size == dst_stat.st_size and
+                src_stat.st_mtime == dst_stat.st_mtime and
+                src_stat.st_ctime == dst_stat.st_ctime)
+        return skip
+
+def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data, skip_latest_timepoint, dry_run):
+    processed_bytecount = 0
+    total_bytecount = 0
+
+    def file_op(src_fpath, dst_fpath, mv_else_cp):
+        nonlocal processed_bytecount
+        _mkdir_for_fpath(dst_fpath, dry_run)
+        bytecount = src_fpath.stat().st_size
+        print('{} "{}" -> "{}"... '.format('mv' if mv_else_cp else 'cp', src_fpath, dst_fpath), end='', flush=True)
+        if not dry_run:
+            if dst_fpath.exists():
+                dst_fpath.unlink()
+            (shutil.move if mv_else_cp else shutil.copy2)(src_fpath, dst_fpath)
+        processed_bytecount += bytecount
+        print('{:.2%}'.format(processed_bytecount / total_bytecount))
+
+    mv_fpaths = []
+    cp_fpaths = []
+    metadatas = []
+
+    print('Scanning...')
+    for src_exp_dpath, dst_exp_dpath in ((SOURCE_5X_DPATH, DESTINATION_DPATH / '5x'), (SOURCE_10X_DPATH, DESTINATION_DPATH / '10x')):
+        metadata_str, metadata = _load_json_metadata(src_exp_dpath / 'experiment_metadata.json')
+        timepoints = metadata['timepoints']
+        if skip_latest_timepoint and timepoints:
+            timepoints.pop()
+        position_idxs = [int(k) for k in metadata['positions'].keys()]
+        print('', str(src_exp_dpath))
+        if copy_metadata:
+            metadatas.append((dst_exp_dpath / 'experiment_metadata.json', metadata_str))
+            src_fpath = src_exp_dpath / 'acquisitions.log'
+            dst_fpath = dst_exp_dpath / 'acquisitions.log'
+            if not _should_skip(src_fpath, dst_fpath):
+                cp_fpaths.append((src_fpath, dst_fpath))
+            src_fpath = src_exp_dpath / 'acquire_youngworms-zp3.py'
+            dst_fpath = dst_exp_dpath / 'acquire_youngworms-zp3.py'
+            if not _should_skip(src_fpath, dst_fpath):
+                cp_fpaths.append((src_fpath, dst_fpath))
+        for timepoint in timepoints:
+            print(' ', timepoint)
+            if copy_calibrations:
+                def do_calibration_fname(fname):
+                    src_fpath = src_exp_dpath / '{} {}'.format(timepoint, fname)
+                    dst_fpath = dst_exp_dpath / '{} {}'.format(timepoint, fname)
+                    if not _should_skip(src_fpath, dst_fpath):
+                        cp_fpaths.append((src_fpath, dst_fpath))
+                do_calibration_fname('bf_flatfield.tiff')
+                do_calibration_fname('vignette_mask.png')
+            for position_idx in position_idxs:
+                print('  ', position_idx)
+                src_pos_dpath = src_exp_dpath / '{:02}'.format(position_idx)
+                dst_pos_dpath = src_exp_dpath / '{:02}'.format(position_idx)
+                if zstack_action != ZStackAction.IgnoreZStacks:
+                    stack_dname = '{} focus'.format(timepoint)
+                    src_stack_dpath = src_pos_dpath / stack_dname
+                    if src_stack_dpath.exists():
+                        print('   ', stack_dname)
+                        dst_stack_dpath = dst_pos_dpath / stack_dname
+                        xx_fpaths = mv_fpaths if zstack_action is ZStackAction.MoveZStacks else cp_fpaths
+                        for src_fpath in sorted(src_stack_dpath.glob('*')):
+                            if re.match(r'fine_focus-\d{2}\.tiff', src_fpath.name):
+                                dst_fpath = dst_stack_dpath / '{} focus'.format(timepoint)
+                                if not _should_skip(src_fpath, dst_fpath):
+                                    xx_fpaths.append((src_fpath, dst_fpath))
+                if copy_metadata:
+                    pos_metadata_str, pos_metadata = _load_json_metadata(src_pos_dpath / 'position_metadata.json')
+                    metadatas.append((dst_pos_dpath / 'position_metadata.json', pos_metadata_str))
+                if copy_other_data:
+                    src_fpath = src_pos_dpath / '{} bf.tiff'.format(timepoint)
+                    dst_fpath = dst_pos_dpath / '{} bf.tiff'.format(timepoint)
+                    if not _should_skip(src_fpath, dst_fpath):
+                        cp_fpaths.append((src_fpath, dst_fpath))
+
+    total_bytecount = sum(fpath.stat().st_size for fpaths in (mv_fpaths, cp_fpaths) for fpath in fpaths)
+    for src_fpath, dst_fpath in mv_fpaths:
+        file_op(src_fpath, dst_fpath, True)
+    for src_fpath, dst_fpath in cp_fpaths:
+        file_op(src_fpath, dst_fpath, False)
 
 if __name__ == '__main__':
     import sys
     parser = argparse.ArgumentParser(
         description='Move z stack images and/or copy other image files and metadata from 20160209_N2Acquisition experiment '
                     'directories to our reorganized local directory structure.')
-    parser.add_argument('--include-newest-zstacks', action='store_true')
+    parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--skip-latest-timepoint', action='store_true')
     parser.add_argument('--copy-zstacks', action='store_true')
     parser.add_argument('--move-zstacks', action='store_true')
     parser.add_argument('--copy-metadata', action='store_true')
@@ -49,7 +175,7 @@ if __name__ == '__main__':
     parser.add_argument('--copy-other-data', action='store_true')
     args = parser.parse_args()
     if args.copy_zstacks and args.move_zstacks:
-        print('The --copy-zstacks and --move-zstacks switches are mutually exclusive.\n', file=sys.stderr)
+        print('--copy-zstacks and --move-zstacks are mutually exclusive.\n', file=sys.stderr)
         parser.print_usage(file=sys.stderr)
         sys.exit(-1)
     if not any((args.copy_zstacks, args.move_zstacks, args.copy_metadata, args.copy_calibrations, args.copy_other_data)):
@@ -63,4 +189,4 @@ if __name__ == '__main__':
         zstack_action = ZStackAction.MoveZStacks
     else:
         zstack_action = ZStackAction.IgnoreZStacks
-    pull_files(zstack_action, args.include_newest_zstacks, args.copy_metadata, args.copy_calibrations, args.copy_other_data)
+    pull_files(zstack_action, args.copy_metadata, args.copy_calibrations, args.copy_other_data, args.skip_latest_timepoint, args.dry_run)
