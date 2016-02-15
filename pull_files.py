@@ -23,6 +23,7 @@
 # Authors: Erik Hvatum <ice.rikh@gmail.com>
 
 import argparse
+from datetime import datetime
 import enum
 import json
 from pathlib import Path
@@ -39,6 +40,28 @@ class ZStackAction(enum.Enum):
     CopyZStacks = 0
     MoveZStacks = 1
     IgnoreZStacks = 2
+
+JSON_METADATA_LOADING_RETRY_COUNT = 3
+
+def _td_format(td_object):
+    """From http://stackoverflow.com/a/538687"""
+    seconds = int(td_object.total_seconds())
+    periods = [
+        ('year',   60*60*24*365),
+        ('month',  60*60*24*30),
+        ('day',    60*60*24),
+        ('hour',   60*60),
+        ('minute', 60),
+        ('second', 1)]
+    strings=[]
+    for period_name,period_seconds in periods:
+        if seconds > period_seconds:
+            period_value, seconds = divmod(seconds,period_seconds)
+            if period_value == 1:
+                strings.append("%s %s" % (period_value, period_name))
+            else:
+                strings.append("%s %ss" % (period_value, period_name))
+    return ", ".join(strings)
 
 def _load_json_metadata(fpath):
     # Retry if parsing fails in case json file was truncated or absent due to being in the process of being rewritten
@@ -107,8 +130,11 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
             if dst_fpath.exists():
                 dst_fpath.unlink()
             (shutil.move if mv_else_cp else shutil.copy2)(str(src_fpath), str(dst_fpath))
+        t1 = datetime.now()
         processed_bytecount += bytecount
-        print('{:.3%}'.format(processed_bytecount / total_bytecount))
+        processed_frac = processed_bytecount / total_bytecount
+        unprocessed_frac = 1.0 - processed_frac
+        print('{:.3%}, {} remaining'.format(processed_frac, _td_format((t1-t0)*(unprocessed_frac/processed_frac))))
 
     mv_fpaths = []
     cp_fpaths = []
@@ -171,6 +197,7 @@ def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data,
 
     total_bytecount = sum(len(metadata_str) for metadata_fpath, metadata_str in metadatas)
     total_bytecount+= sum(fpath[0].stat().st_size for fpaths in (mv_fpaths, cp_fpaths) for fpath in fpaths)
+    t0 = datetime.now()
 
     for dst_fpath, metadata_str in metadatas:
         metadata_op(dst_fpath, metadata_str)
