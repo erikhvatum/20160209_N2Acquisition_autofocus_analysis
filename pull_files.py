@@ -101,8 +101,7 @@ def _should_skip(src_fpath, dst_fpath):
             dst_stat = dst_fpath.stat()
             skip = (
                 src_stat.st_size == dst_stat.st_size and
-                src_stat.st_mtime == dst_stat.st_mtime and
-                src_stat.st_ctime == dst_stat.st_ctime)
+                src_stat.st_mtime == dst_stat.st_mtime)
         return skip
 
 def pull_files(zstack_action, copy_metadata, copy_calibrations, copy_other_data, skip_latest_timepoint, dry_run):
